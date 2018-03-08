@@ -7,6 +7,11 @@
   if (location.protocol === 'file:') {
     window.test = 'preload'
     window.process = process
+    if (process.env.main) {
+      process.env.renderer = 'renderer'
+      window.test = { main: process.env.main,
+                      renderer: process.env.renderer }
+    }
   } else if (location.href !== 'about:blank') {
     addEventListener('DOMContentLoaded', () => {
       ipcRenderer.send('child-loaded', window.opener == null, document.body.innerHTML)

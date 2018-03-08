@@ -16,6 +16,8 @@
 #include "atom/renderer/api/atom_api_renderer_ipc.h"
 #include "atom/renderer/atom_render_view_observer.h"
 #include "base/command_line.h"
+#include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/renderer/printing/print_web_view_helper.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_view.h"
@@ -80,52 +82,51 @@ v8::Local<v8::Value> GetBinding(v8::Isolate* isolate, v8::Local<v8::String> key,
   return exports;
 }
 
-static void EnvGetter(Local<Name> property,
-                      const PropertyCallbackInfo<Value>& info) {
-  Isolate* isolate = info.GetIsolate();
+static void EnvGetter(v8::Local<v8::Name> property,
+                      const v8::PropertyCallbackInfo<v8::Value>& info) {
+  v8::Isolate* isolate = info.GetIsolate();
   if (property->IsSymbol()) {
     return info.GetReturnValue().SetUndefined();
   }
 #ifdef __POSIX__
-  node::Utf8Value key(isolate, property);
-  const char* val = getenv(*key);
+  const char* val = getenv(mate::V8ToString(property).c_str());
   if (val) {
     return info.GetReturnValue().Set(String::NewFromUtf8(isolate, val));
   }
 #else  // _WIN32
-  node::TwoByteValue key(isolate, property);
-  WCHAR buffer[32767];  // The maximum size allowed for environment variables.
+  base::string16 key = base::UTF8ToUTF16(mate::V8ToString(property));
+  const DWORD buff_size = 32767;
+  WCHAR buffer[buff_size];  // The maximum size allowed for environment variables.
   SetLastError(ERROR_SUCCESS);
-  DWORD result = GetEnvironmentVariableW(reinterpret_cast<WCHAR*>(*key),
+  DWORD result = GetEnvironmentVariableW(key.c_str(),
                                          buffer,
-                                         arraysize(buffer));
+                                         buff_size);
   // If result >= sizeof buffer the buffer was too small. That should never
   // happen. If result == 0 and result != ERROR_SUCCESS the variable was not
   // not found.
   if ((result > 0 || GetLastError() == ERROR_SUCCESS) &&
-      result < arraysize(buffer)) {
+      result < buff_size) {
     const uint16_t* two_byte_buffer = reinterpret_cast<const uint16_t*>(buffer);
-    Local<String> rc = String::NewFromTwoByte(isolate, two_byte_buffer);
+    v8::Local<v8::String> rc = v8::String::NewFromTwoByte(isolate, two_byte_buffer);
     return info.GetReturnValue().Set(rc);
   }
 #endif
 }
 
 
-static void EnvSetter(Local<Name> property,
-                      Local<Value> value,
-                      const PropertyCallbackInfo<Value>& info) {
+static void EnvSetter(v8::Local<v8::Name> property,
+                      v8::Local<v8::Value> value,
+                      const v8::PropertyCallbackInfo<v8::Value>& info) {
 #ifdef __POSIX__
-  node::Utf8Value key(info.GetIsolate(), property);
-  node::Utf8Value val(info.GetIsolate(), value);
-  setenv(*key, *val, 1);
+  std::string key = mate::V8ToString(property);
+  std::string val = mate::V8ToString(value);
+  setenv(key.c_str(), val.c_str(), 1);
 #else  // _WIN32
-  node::TwoByteValue key(info.GetIsolate(), property);
-  node::TwoByteValue val(info.GetIsolate(), value);
-  WCHAR* key_ptr = reinterpret_cast<WCHAR*>(*key);
+  base::string16 key = base::UTF8ToUTF16(mate::V8ToString(property));
+  base::string16 val = base::UTF8ToUTF16(mate::V8ToString(value));
   // Environment variables that start with '=' are read-only.
-  if (key_ptr[0] != L'=') {
-    SetEnvironmentVariableW(key_ptr, reinterpret_cast<WCHAR*>(*val));
+  if (key[0] != L'=') {
+    SetEnvironmentVariableW(key.c_str(), val.c_str());
   }
 #endif
   // Whether it worked or not, always return value.
@@ -133,22 +134,21 @@ static void EnvSetter(Local<Name> property,
 }
 
 
-static void EnvQuery(Local<Name> property,
-                     const PropertyCallbackInfo<Integer>& info) {
+static void EnvQuery(v8::Local<v8::Name> property,
+                     const v8::PropertyCallbackInfo<v8::Integer>& info) {
   int32_t rc = -1;  // Not found unless proven otherwise.
   if (property->IsString()) {
 #ifdef __POSIX__
-    node::Utf8Value key(info.GetIsolate(), property);
-    if (getenv(*key))
+    std::string key = mate::V8ToString(property);
+    if (getenv(key.c_str()))
       rc = 0;
 #else  // _WIN32
-    node::TwoByteValue key(info.GetIsolate(), property);
-    WCHAR* key_ptr = reinterpret_cast<WCHAR*>(*key);
+    base::string16 key = base::UTF8ToUTF16(mate::V8ToString(property));
     SetLastError(ERROR_SUCCESS);
-    if (GetEnvironmentVariableW(key_ptr, nullptr, 0) > 0 ||
+    if (GetEnvironmentVariableW(key.c_str(), nullptr, 0) > 0 ||
         GetLastError() == ERROR_SUCCESS) {
       rc = 0;
-      if (key_ptr[0] == L'=') {
+      if (key[0] == L'=') {
         // Environment variables that start with '=' are hidden and read-only.
         rc = static_cast<int32_t>(v8::ReadOnly) |
              static_cast<int32_t>(v8::DontDelete) |
@@ -162,16 +162,15 @@ static void EnvQuery(Local<Name> property,
 }
 
 
-static void EnvDeleter(Local<Name> property,
-                       const PropertyCallbackInfo<Boolean>& info) {
+static void EnvDeleter(v8::Local<v8::Name> property,
+                       const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   if (property->IsString()) {
 #ifdef __POSIX__
-    node::Utf8Value key(info.GetIsolate(), property);
-    unsetenv(*key);
+    std::string key = mate::V8ToString(property);
+    unsetenv(key.c_str());
 #else
-    node::TwoByteValue key(info.GetIsolate(), property);
-    WCHAR* key_ptr = reinterpret_cast<WCHAR*>(*key);
-    SetEnvironmentVariableW(key_ptr, nullptr);
+    base::string16 key = base::UTF8ToUTF16(mate::V8ToString(property));
+    SetEnvironmentVariableW(key.c_str(), nullptr);
 #endif
   }
 
@@ -181,12 +180,12 @@ static void EnvDeleter(Local<Name> property,
 }
 
 
-static void EnvEnumerator(const PropertyCallbackInfo<Array>& info) {
-  Environment* env = Environment::GetCurrent(info);
-  Isolate* isolate = env->isolate();
-  Local<Context> ctx = env->context();
-  Local<Function> fn = env->push_values_to_array_function();
-  Local<Value> argv[NODE_PUSH_VAL_TO_ARRAY_MAX];
+static void EnvEnumerator(const v8::PropertyCallbackInfo<v8::Array>& info) {
+  node::Environment* env = node::Environment::GetCurrent(info);
+  v8::Isolate* isolate = env->isolate();
+  v8::Local<v8::Context> ctx = env->context();
+  v8::Local<v8::Function> fn = env->push_values_to_array_function();
+  v8::Local<v8::Value> argv[NODE_PUSH_VAL_TO_ARRAY_MAX];
   size_t idx = 0;
 
 #ifdef __POSIX__
@@ -194,7 +193,7 @@ static void EnvEnumerator(const PropertyCallbackInfo<Array>& info) {
   while (environ[size])
     size++;
 
-  Local<Array> envarr = Array::New(isolate);
+  v8::Local<v8::Array> envarr = v8::Array::New(isolate);
 
   for (int i = 0; i < size; ++i) {
     const char* var = environ[i];
@@ -216,7 +215,7 @@ static void EnvEnumerator(const PropertyCallbackInfo<Array>& info) {
   WCHAR* environment = GetEnvironmentStringsW();
   if (environment == nullptr)
     return;  // This should not happen.
-  Local<Array> envarr = Array::New(isolate);
+  v8::Local<v8::Array> envarr = v8::Array::New(isolate);
   WCHAR* p = environment;
   while (*p) {
     WCHAR *s;
@@ -232,11 +231,11 @@ static void EnvEnumerator(const PropertyCallbackInfo<Array>& info) {
     }
     const uint16_t* two_byte_buffer = reinterpret_cast<const uint16_t*>(p);
     const size_t two_byte_buffer_len = s - p;
-    argv[idx] = String::NewFromTwoByte(isolate,
+    argv[idx] = v8::String::NewFromTwoByte(isolate,
                                        two_byte_buffer,
-                                       String::kNormalString,
+                                       v8::String::kNormalString,
                                        two_byte_buffer_len);
-    if (++idx >= arraysize(argv)) {
+    if (++idx >= NODE_PUSH_VAL_TO_ARRAY_MAX) {
       fn->Call(ctx, envarr, idx, argv).ToLocalChecked();
       idx = 0;
     }
@@ -266,19 +265,18 @@ void InitializeBindings(v8::Local<v8::Object> binding,
   b.SetMethod("getProcessMemoryInfo", &AtomBindings::GetProcessMemoryInfo);
   b.SetMethod("getSystemMemoryInfo", &AtomBindings::GetSystemMemoryInfo);
    // create process.env
-  Local<ObjectTemplate> process_env_template =
-      ObjectTemplate::New(env->isolate());
-  process_env_template->SetHandler(NamedPropertyHandlerConfiguration(
+  v8::Local<v8::ObjectTemplate> process_env_template =
+      v8::ObjectTemplate::New(isolate);
+  process_env_template->SetHandler(v8::NamedPropertyHandlerConfiguration(
           EnvGetter,
           EnvSetter,
           EnvQuery,
           EnvDeleter,
-          EnvEnumerator,
-          env->as_external()));
+          EnvEnumerator));
 
-  Local<Object> process_env =
-      process_env_template->NewInstance(env->context()).ToLocalChecked();
-  b.SetMethod("env", process_env);
+  v8::Local<v8::Object> process_env =
+      process_env_template->NewInstance(context).ToLocalChecked();
+  b.Set("env", process_env);
 }
 
 class AtomSandboxedRenderViewObserver : public AtomRenderViewObserver {
