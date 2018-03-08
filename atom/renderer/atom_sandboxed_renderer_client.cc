@@ -95,19 +95,20 @@ static void EnvGetter(v8::Local<v8::Name> property,
   }
 #else  // _WIN32
   base::string16 key = base::UTF8ToUTF16(mate::V8ToString(property));
-  const DWORD buff_size = 32767;
-  WCHAR buffer[buff_size];  // The maximum size allowed for environment variables.
+  const DWORD kBufferSize = 32767;
+  WCHAR buffer[kBufferSize];
   SetLastError(ERROR_SUCCESS);
   DWORD result = GetEnvironmentVariableW(key.c_str(),
                                          buffer,
-                                         buff_size);
+                                         kBufferSize);
   // If result >= sizeof buffer the buffer was too small. That should never
   // happen. If result == 0 and result != ERROR_SUCCESS the variable was not
   // not found.
   if ((result > 0 || GetLastError() == ERROR_SUCCESS) &&
-      result < buff_size) {
+      result < kBufferSize) {
     const uint16_t* two_byte_buffer = reinterpret_cast<const uint16_t*>(buffer);
-    v8::Local<v8::String> rc = v8::String::NewFromTwoByte(isolate, two_byte_buffer);
+    v8::Local<v8::String> rc = v8::String::NewFromTwoByte(isolate,
+                                                          two_byte_buffer);
     return info.GetReturnValue().Set(rc);
   }
 #endif
@@ -264,7 +265,7 @@ void InitializeBindings(v8::Local<v8::Object> binding,
   b.SetMethod("getArgv", GetArgv);
   b.SetMethod("getProcessMemoryInfo", &AtomBindings::GetProcessMemoryInfo);
   b.SetMethod("getSystemMemoryInfo", &AtomBindings::GetSystemMemoryInfo);
-   // create process.env
+  // create process.env
   v8::Local<v8::ObjectTemplate> process_env_template =
       v8::ObjectTemplate::New(isolate);
   process_env_template->SetHandler(v8::NamedPropertyHandlerConfiguration(

@@ -10,7 +10,7 @@
     if (process.env.main) {
       process.env.renderer = 'renderer'
       window.test = { main: process.env.main,
-                      renderer: process.env.renderer }
+        renderer: process.env.renderer }
     }
   } else if (location.href !== 'about:blank') {
     addEventListener('DOMContentLoaded', () => {
